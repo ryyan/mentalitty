@@ -1,21 +1,24 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	lipgloss "github.com/charmbracelet/lipgloss"
 )
 
 const (
 	gameStateMain = 0
 	gameStatePlay = 1
+	gameStateOver = 2
 
-	gameModeAgility    = 0
-	gameModeMemory     = 1
-	gameModePerception = 2
-	gameModeLogic      = 3
+	gameModeAgility    = "Agility"
+	gameModeMemory     = "Memory"
+	gameModePerception = "Perception"
+	gameModeLogic      = "Logic"
 
 	arrowUpChar    = "↑"
 	arrowDownChar  = "↓"
@@ -23,11 +26,21 @@ const (
 	arrowRightChar = "→"
 )
 
+var (
+	styleCenter = lipgloss.NewStyle().
+		Bold(true).
+		Width(60).
+		Padding(1).
+		Margin(1).
+		Align(lipgloss.Center).
+		BorderStyle(lipgloss.ThickBorder())
+)
+
 type model struct {
 	GameState int
-	GameMode  int
+	GameMode  string
 
-	CorrectAnswers      int
+	Score               int
 	AgilityCurrentArrow string
 
 	Ticks    int
@@ -38,8 +51,8 @@ type model struct {
 }
 
 func main() {
-	initialModel := model{0, 0, 0, "", 10, 0, 0, false, false}
-	p := tea.NewProgram(initialModel)
+	initialModel := model{0, "", 0, "", 10, 0, 0, false, false}
+	p := tea.NewProgram(initialModel, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		fmt.Println("could not start program:", err)
@@ -55,7 +68,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Make sure these keys always quit
 	if msg, ok := msg.(tea.KeyMsg); ok {
 		k := msg.String()
-		if k == "q" || k == "esc" || k == "ctrl+c" {
+		if (k == "q" || k == "esc" || k == "ctrl+c") && m.GameState != gameStateOver {
 			m.Quitting = true
 			return m, tea.Quit
 		}
@@ -66,6 +79,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.GameState {
 	case gameStateMain:
 		return updateMainMenu(msg, m)
+	case gameStateOver:
+		return updateGameOver(msg, m)
 	case gameStatePlay:
 		switch m.GameMode {
 		case gameModeAgility:
@@ -78,14 +93,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // Main view, which calls the appropriate sub-view
 func (m model) View() string {
+	result := ""
+
 	switch m.GameState {
 	case gameStateMain:
-		return viewMainMenu(m)
+		result = viewMainMenu(m)
+	case gameStateOver:
+		result = viewGameOver(m)
 	case gameStatePlay:
-		return viewAgility(m)
+		result = viewAgility(m)
 	}
 
-	return ""
+	return styleCenter.Render(result)
 }
 
 // Sub-update functions
@@ -107,6 +126,19 @@ func updateMainMenu(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 	return m, frame()
 }
 
+func updateGameOver(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		default:
+			m.GameState = gameStateMain
+			m.GameMode = ""
+		}
+	}
+
+	return m, frame()
+}
+
 func updateAgility(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -114,46 +146,45 @@ func updateAgility(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 		case "w", "up":
 			if m.AgilityCurrentArrow == arrowUpChar {
 				m.AgilityCurrentArrow = ""
-				m.CorrectAnswers += 1
+				m.Score += 1
 			} else {
-				m.Quitting = true
-				return m, tea.Quit
+				m.GameState = gameStateOver
+				return m, nil
 			}
 
 		case "s", "down":
 			if m.AgilityCurrentArrow == arrowDownChar {
 				m.AgilityCurrentArrow = ""
-				m.CorrectAnswers += 1
+				m.Score += 1
 			} else {
-				m.Quitting = true
-				return m, tea.Quit
+				m.GameState = gameStateOver
+				return m, nil
 			}
 
 		case "a", "left":
 			if m.AgilityCurrentArrow == arrowLeftChar {
 				m.AgilityCurrentArrow = ""
-				m.CorrectAnswers += 1
+				m.Score += 1
 			} else {
-				m.Quitting = true
-				return m, tea.Quit
+				m.GameState = gameStateOver
+				return m, nil
 			}
 
 		case "d", "right":
 			if m.AgilityCurrentArrow == arrowRightChar {
 				m.AgilityCurrentArrow = ""
-				m.CorrectAnswers += 1
+				m.Score += 1
 			} else {
-				m.Quitting = true
-				return m, tea.Quit
+				m.GameState = gameStateOver
+				return m, nil
 			}
 		}
 	}
 
 	if m.AgilityCurrentArrow == "" {
-		seed := rand.NewSource(time.Now().UnixNano())
-		random := rand.New(seed)
+		num, _ := rand.Int(rand.Reader, big.NewInt(4))
 
-		switch random.Intn(4) {
+		switch num.Int64() {
 		case 0:
 			m.AgilityCurrentArrow = arrowUpChar
 		case 1:
@@ -172,7 +203,7 @@ func updateAgility(msg tea.Msg, m model) (tea.Model, tea.Cmd) {
 
 func viewMainMenu(m model) string {
 	tpl := "%s\n\n"
-	tpl += " q, esc: quit"
+	tpl += "Press q, esc, or ctrl+c to quit"
 
 	choices := fmt.Sprintf(
 		" %s%s\n %s%s\n %s%s\n %s%s",
@@ -189,11 +220,20 @@ func viewMainMenu(m model) string {
 	return fmt.Sprintf(tpl, choices)
 }
 
+func viewGameOver(m model) string {
+	tpl := "Good job!\n\n"
+	tpl += "Game: %s\n"
+	tpl += "Score: %d\n\n"
+	tpl += "Press any key to continue"
+
+	return fmt.Sprintf(tpl, m.GameMode, m.Score)
+}
+
 func viewAgility(m model) string {
 	tpl := "  %s\n %s%s%s\n  %s\n\n\n"
-	tpl += "Score: %d\n"
+	tpl += "Score: %d"
 
-	return fmt.Sprintf(tpl, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.CorrectAnswers)
+	return fmt.Sprintf(tpl, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.AgilityCurrentArrow, m.Score)
 }
 
 // Utils
